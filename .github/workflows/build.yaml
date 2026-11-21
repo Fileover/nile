@@ -1,12 +1,33 @@
 name: Build binaries
-on: [push]
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15-intel, macos-15, windows-2025]
+        include:
+          - os: macos-15-intel
+            artifact: nile_macOS_x86_64
+            binary: nile_macOS_x86_64
+          - os: macos-15
+            artifact: nile_macOS_arm64
+            binary: nile_macOS_arm64
+          - os: windows-2025
+            artifact: nile_windows_x86_64
+            binary: nile_windows_x86_64.exe
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -18,7 +39,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
       with:
-        enable-cache: true 
+        enable-cache: true
 
     - name: Install pyinstaller and dependencies
       run: uv sync --extra pyinstaller_build --no-install-local
@@ -35,22 +56,37 @@ jobs:
     - name: Build
       run: uv run --module PyInstaller
         --onefile
-        --name nile 
+        --name nile
         ${{ steps.strip.outputs.option }}
         nile/cli.py
       env:
         PYTHONOPTIMIZE: 1
 
+    # PyInstaller writes dist/nile (dist/nile.exe on Windows), rename it to
+    # the name used by the release assets so artifacts are usable as is
+    - name: Rename to release name
+      shell: bash
+      run: |
+        src=dist/nile.exe
+        [ -f "$src" ] || src=dist/nile
+        mv "$src" "dist/${{ matrix.binary }}"
+
     - uses: actions/upload-artifact@v7
       with:
-        name: nile-${{ matrix.os }}
+        name: ${{ matrix.artifact }}
         path: dist/*
 
   zipapp:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        include:
+          - os: ubuntu-22.04
+            artifact: nile_linux_x86_64
+            binary: nile_linux_x86_64
+          - os: ubuntu-22.04-arm
+            artifact: nile_linux_arm64
+            binary: nile_linux_arm64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -61,7 +97,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
-          enable-cache: true 
+          enable-cache: true
 
       - run: mkdir -p build dist
       - name: Dependencies
@@ -75,7 +111,10 @@ jobs:
           --compress
           build
 
+      - name: Rename to release name
+        run: mv dist/nile dist/${{ matrix.binary }}
+
       - uses: actions/upload-artifact@v7
         with:
-          name: nile-${{ matrix.os }}
+          name: ${{ matrix.artifact }}
           path: dist/*
